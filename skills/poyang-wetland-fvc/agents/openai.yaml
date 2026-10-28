@@ -1,5 +1,5 @@
 interface:
-  display_name: 鄱阳湖湿地 FVC
+  display_name: "湿地fvc"
   short_description: 基于真实 NDVI、分位数端元与水体掩膜构建可复用 FVC 分析网站
   default_prompt: 使用 $poyang-wetland-fvc，从源码模板构建支持真实 CSV 与 GeoTIFF 导入的湿地 FVC 交互分析工具。
   icon_small: assets/icon.svg

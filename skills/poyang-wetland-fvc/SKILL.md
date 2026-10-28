@@ -1,9 +1,9 @@
 ---
 name: poyang-wetland-fvc
-description: Build, run, or adapt a Poyang Lake wetland fractional vegetation cover website from bundled source. Use for real NDVI CSV/GeoTIFF imports, P5/P95 pixel dichotomy FVC, independent/fixed-endmember controls, MNDWI/NDWI/existing water-mask comparisons, or reproducible status-aware CSV/JSON audits. Never invent observations or treat excluded water as zero-FVC vegetation.
+description: Build, run, or adapt a wetland fractional vegetation cover website from bundled source. Use for real NDVI CSV/GeoTIFF imports, P5/P95 pixel dichotomy FVC, independent/fixed-endmember controls, MNDWI/NDWI/existing water-mask comparisons, or reproducible status-aware CSV/JSON audits. Never invent observations or treat excluded water as zero-FVC vegetation.
 ---
 
-# 鄱阳湖湿地 FVC
+# 湿地fvc
 
 Use `assets/site/` as the browser-local website template. Read `references/model-and-data.md` before interpreting results or changing the model. Read `references/source-and-limits.md` before promising spatial validation or publishing.
 

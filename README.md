@@ -1,4 +1,4 @@
-# 鄱阳湖湿地 FVC · Poyang Wetland FVC
+# 湿地fvc
 
 可复用的 AI Skill 与浏览器本地分析网站源码。支持导入真实 NDVI CSV / 单波段 GeoTIFF，比较 MNDWI、NDWI 和已有水体掩膜方案，以二元像元模型探索植被覆盖度。
 
