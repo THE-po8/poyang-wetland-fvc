@@ -1,0 +1,4 @@
+node_modules/
+dist/
+site.tar.gz
+.DS_Store

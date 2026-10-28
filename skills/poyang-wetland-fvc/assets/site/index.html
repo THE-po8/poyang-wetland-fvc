@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="鄱阳湖湿地 FVC 二元像元模型交互分析工具：导入真实 NDVI 数据，比较 MNDWI、NDWI 与已有水体掩膜方案。" />
+    <title>鄱阳湖湿地 FVC 交互分析</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="返回顶部">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40"><path d="M8 25c4-9 11-14 23-14-2 13-9 20-21 20 5-2 10-6 14-12-6 3-10 7-13 13"/><path d="M7 12c4 1 7 4 8 8-5 0-8-3-8-8Z"/></svg>
+        </span>
+        <span>鄱阳湖湿地 <b>FVC Lab</b></span>
+      </a>
+      <div class="top-actions">
+        <span class="privacy-pill"><i></i>数据仅在本机处理</span>
+        <button id="reset-btn" class="ghost-btn" type="button" disabled>重置</button>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero-section" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">POYANG LAKE · PIXEL DICHOTOMY MODEL</p>
+          <h1 id="hero-title">从真实 NDVI 到<br/><span>可审查的植被覆盖度</span></h1>
+          <p class="hero-lead">导入像元数据，使用 5% 与 95% 分位数确定端元，比较三种水体排除方案，并把水体与湿地植被结果明确分开。</p>
+          <div class="formula-card" aria-label="FVC 计算公式">
+            <div class="formula-main">
+              <span>FVC</span><b>=</b>
+              <span class="fraction"><i>NDVI − NDVI<sub>soil</sub></i><i>NDVI<sub>veg</sub> − NDVI<sub>soil</sub></i></span>
+            </div>
+            <div class="formula-rules"><span>NDVI<sub>soil</sub> = P<sub>5</sub></span><span>NDVI<sub>veg</sub> = P<sub>95</sub></span><span>0 ≤ FVC ≤ 1</span></div>
+          </div>
+        </div>
+
+        <div class="import-card">
+          <div class="card-heading">
+            <div><span class="step-label">数据入口</span><h2>载入真实像元数据</h2></div>
+            <button id="format-help-btn" class="icon-btn" type="button" aria-label="查看数据格式说明" title="数据格式说明">?</button>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="数据格式">
+            <button class="tab active" data-tab="csv" role="tab" aria-selected="true">CSV 表格</button>
+            <button class="tab" data-tab="tiff" role="tab" aria-selected="false">GeoTIFF 栅格</button>
+          </div>
+
+          <div id="csv-panel" class="tab-panel active" role="tabpanel">
+            <label class="dropzone" id="csv-dropzone" for="csv-input">
+              <input id="csv-input" type="file" accept=".csv,text/csv" />
+              <span class="upload-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+              </span>
+              <strong>拖入 CSV，或点击选择</strong>
+              <small>必须包含 NDVI；另含 MNDWI、NDWI 或 water_mask 至少一项</small>
+            </label>
+            <button id="template-btn" class="text-btn" type="button">下载空白 CSV 结构 <span>↓</span></button>
+          </div>
+
+          <div id="tiff-panel" class="tab-panel" role="tabpanel" hidden>
+            <div class="raster-grid">
+              <label class="raster-slot required" for="ndvi-tiff">
+                <input id="ndvi-tiff" data-kind="ndvi" type="file" accept=".tif,.tiff,image/tiff" />
+                <span><b>NDVI</b><small>必需 · 单波段</small></span><i>+</i>
+              </label>
+              <label class="raster-slot" for="mndwi-tiff">
+                <input id="mndwi-tiff" data-kind="mndwi" type="file" accept=".tif,.tiff,image/tiff" />
+                <span><b>MNDWI</b><small>可选 · 单波段</small></span><i>+</i>
+              </label>
+              <label class="raster-slot" for="ndwi-tiff">
+                <input id="ndwi-tiff" data-kind="ndwi" type="file" accept=".tif,.tiff,image/tiff" />
+                <span><b>NDWI</b><small>可选 · 单波段</small></span><i>+</i>
+              </label>
+              <label class="raster-slot" for="mask-tiff">
+                <input id="mask-tiff" data-kind="mask" type="file" accept=".tif,.tiff,image/tiff" />
+                <span><b>水体掩膜</b><small>可选 · 水体值 &gt; 0.5</small></span><i>+</i>
+              </label>
+            </div>
+            <label class="scale-row">指数缩放系数 <input id="scale-input" type="number" value="1" step="any" aria-label="GeoTIFF 指数缩放系数"/><small>常见整型指数可填写 0.0001；水体掩膜不缩放</small></label>
+          </div>
+
+          <div id="data-status" class="data-status" aria-live="polite">
+            <span class="status-dot"></span><p><b>等待数据</b><small>未载入任何观测值</small></p>
+          </div>
+          <button id="analyze-btn" class="primary-btn" type="button" disabled><span>开始 FVC 分析</span><b>→</b></button>
+        </div>
+      </section>
+
+      <section id="results-section" class="results-section" aria-labelledby="results-title" hidden>
+        <div class="results-heading">
+          <div><p class="eyebrow">ANALYSIS WORKSPACE</p><h2 id="results-title">模型结果与掩膜对比</h2><p id="result-subtitle">—</p></div>
+          <div class="results-actions">
+            <button id="export-btn" class="secondary-btn" type="button">导出像元结果 CSV</button>
+          </div>
+        </div>
+
+        <div class="analysis-toolbar">
+          <div><label>当前水体方案</label><div id="method-switch" class="method-switch" role="radiogroup" aria-label="水体掩膜方案"></div></div>
+          <label class="threshold-control"><span>判为水体的阈值</span><input id="threshold-input" type="number" step="0.01" value="0"/><small id="threshold-hint">指数值 &gt; 0</small></label>
+        </div>
+
+        <div class="metrics-grid">
+          <article class="metric-card soil"><span>NDVI<sub>soil</sub> · P5</span><strong id="soil-value">—</strong><small>非水体有效像元</small></article>
+          <article class="metric-card veg"><span>NDVI<sub>veg</sub> · P95</span><strong id="veg-value">—</strong><small>非水体有效像元</small></article>
+          <article class="metric-card mean"><span>平均 FVC</span><strong id="mean-value">—</strong><small>已限制在 [0, 1]</small></article>
+          <article class="metric-card water"><span>排除水体像元</span><strong id="water-value">—</strong><small id="water-rate">—</small></article>
+        </div>
+
+        <div class="workspace-grid">
+          <article class="map-card">
+            <div class="panel-title"><div><span>空间预览</span><h3 id="preview-title">FVC 像元分布</h3></div><span id="preview-size" class="tag">—</span></div>
+            <div class="canvas-wrap"><canvas id="fvc-canvas" width="880" height="520" aria-label="FVC 像元预览图"></canvas><div id="canvas-tooltip" class="canvas-tooltip" hidden></div></div>
+            <div class="legend"><span><i class="water-swatch"></i>排除的水体</span><span><i class="gradient-swatch"></i>湿地植被 FVC：低 → 高</span><span><i class="invalid-swatch"></i>无效 / 掩膜缺失</span></div>
+          </article>
+
+          <article class="audit-card">
+            <div class="panel-title"><div><span>过程审计</span><h3>像元去向</h3></div></div>
+            <div class="donut-wrap"><div id="donut" class="donut"><div><strong id="donut-value">—</strong><small>进入 FVC</small></div></div></div>
+            <dl class="audit-list">
+              <div><dt><i class="result-dot"></i>湿地植被结果</dt><dd id="result-count">—</dd></div>
+              <div><dt><i class="water-dot"></i>水体（已排除）</dt><dd id="water-count">—</dd></div>
+              <div><dt><i class="invalid-dot"></i>无效 / 无掩膜值</dt><dd id="invalid-count">—</dd></div>
+            </dl>
+            <p class="audit-note">水体像元不参与端元分位数计算，也不会写入 FVC 结果。</p>
+          </article>
+        </div>
+
+        <article class="compare-card">
+          <div class="panel-title"><div><span>方案比较</span><h3>同一批真实数据，不同水体边界</h3></div><small>每种方案独立排除水体并重新计算 P5 / P95</small></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>方案</th><th>水体阈值</th><th>排除水体</th><th>NDVI<sub>soil</sub></th><th>NDVI<sub>veg</sub></th><th>平均 FVC</th></tr></thead>
+              <tbody id="compare-body"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <dialog id="format-dialog">
+      <form method="dialog">
+        <button class="dialog-close" aria-label="关闭">×</button>
+        <p class="eyebrow">DATA CONTRACT</p><h2>导入数据结构</h2>
+        <div class="guide-block"><h3>CSV</h3><code>pixel_id, x, y, ndvi, mndwi, ndwi, water_mask</code><p>每行对应一个已对齐像元。<b>ndvi</b> 必需；水体字段至少提供一个。water_mask 使用 1 表示水体、0 表示非水体。坐标与其他水体字段可留空，但不能用虚构值补齐。</p></div>
+        <div class="guide-block"><h3>GeoTIFF</h3><p>每项上传单波段栅格。NDVI 与水体指数 / 掩膜必须具有相同的行列数和空间范围；请在 GIS 中预先完成投影、分辨率和像元网格对齐。NoData 会保留为无效像元。</p></div>
+        <p class="dialog-note">本站不附带观测示例，也不会将文件上传到服务器。</p>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

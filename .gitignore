@@ -1,0 +1,8 @@
+node_modules/
+dist/
+fvc-site/
+.env
+.env.*
+.openai/
+*.tar.gz
+.DS_Store
