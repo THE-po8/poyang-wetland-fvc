@@ -13,6 +13,13 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+.experiment-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+.experiment-controls label { font-size: 11px; color: #526a61; }
+.experiment-controls select { display: block; width: 100%; margin-top: 7px; padding: 10px; border: 1px solid #cdd9ce; border-radius: 9px; background: white; color: #164b3e; font: inherit; }
+.experiment-note { padding: 14px; background: #edf5e9; border-radius: 10px; font-size: 11px; line-height: 1.8; color: #456351; }
+.results-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 700px) { .experiment-controls { grid-template-columns: 1fr; } }
 html { scroll-behavior: smooth; }
 body { margin: 0; color: var(--ink); background: var(--cream); font-family: "Noto Sans SC", system-ui, sans-serif; min-height: 100vh; }
 button, input { font: inherit; }

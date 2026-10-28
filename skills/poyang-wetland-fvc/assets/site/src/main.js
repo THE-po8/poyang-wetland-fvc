@@ -1,6 +1,8 @@
 import Papa from 'papaparse';
 import { fromArrayBuffer } from 'geotiff';
-import { analyzeFvc, availableMethods, safeNumber, validateAlignment } from './core.js';
+import { availableMethods, safeNumber, validateAlignment } from './core.js';
+import { runExperiment, MODES } from './experiment.js';
+import { createAudit, exportPixelsCsv, fingerprintFile } from './audit.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -16,6 +18,15 @@ const state = {
   geoRaw: {},
   geoFiles: {},
   selectedMethod: null,
+  selectedMode: 'independent',
+  referenceMethod: null,
+  fixedSource: 'common',
+  experiment: null,
+  sourceFiles: {},
+  pendingReads: 0,
+  appliedScale: 1,
+  runId: null,
+  runAt: null,
   thresholds: { mndwi: 0, ndwi: 0, mask: 0.5 },
   results: {},
   analyzed: false,
@@ -24,6 +35,16 @@ const state = {
 };
 
 const methodLabels = { mndwi: 'MNDWI', ndwi: 'NDWI', mask: '已有水体掩膜' };
+
+function invalidateAnalysis() {
+  state.experiment = null;
+  state.results = {};
+  state.analyzed = false;
+  state.mapRect = null;
+  $('#results-section').hidden = true;
+  $('#export-btn').disabled = true;
+  $('#audit-btn').disabled = true;
+}
 
 function toast(message, error = false) {
   const el = $('#toast');
@@ -66,7 +87,8 @@ function updateReadiness() {
   const methods = availableMethods(state.inputs).filter((item) => item.ready);
   const hasNdvi = Boolean(state.inputs.ndvi?.length);
   const ready = hasNdvi && methods.length > 0;
-  $('#analyze-btn').disabled = !ready;
+  $('#analyze-btn').disabled = !ready || state.pendingReads > 0;
+  if (state.pendingReads > 0) { setDataStatus('', '正在读取与校验文件', '文件处理完成前不可运行分析'); return; }
   $('#reset-btn').disabled = !state.source && !Object.keys(state.geoRaw).length;
 
   if (!hasNdvi) {
@@ -91,8 +113,14 @@ function markCsvLoaded(file, rowCount) {
 
 async function loadCsv(file) {
   if (!file) return;
+  if (state.pendingReads) { toast('请等待当前文件读取完成'); return; }
+  state.pendingReads += 1;
+  invalidateAnalysis();
+  updateReadiness();
   try {
-    const text = await file.text();
+    const buffer = await file.arrayBuffer();
+    const provenance = await fingerprintFile(file, buffer);
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
     const parsed = Papa.parse(text, { header: true, skipEmptyLines: 'greedy' });
     if (parsed.errors.some((error) => error.code !== 'UndetectableDelimiter')) {
       throw new Error(parsed.errors[0].message || 'CSV 解析失败');
@@ -118,6 +146,7 @@ async function loadCsv(file) {
     const grid = inferGrid(rows, columns.x, columns.y);
     state.source = 'csv';
     state.sourceName = file.name;
+    state.sourceFiles = { csv: { ...provenance, columns } };
     state.inputs = inputs;
     state.rows = { data: rows, columns };
     state.width = grid.width;
@@ -130,9 +159,12 @@ async function loadCsv(file) {
     markCsvLoaded(file, rows.length);
     updateReadiness();
     const readyMethods = availableMethods(inputs).filter((item) => item.ready);
-    toast(readyMethods.length ? `已读取 ${rows.length.toLocaleString()} 行真实数据` : 'NDVI 已读取；还需要水体指数或已有掩膜');
+    toast(readyMethods.length ? `已解析 ${rows.length.toLocaleString()} 行输入数据；真实性与精度须独立核验` : 'NDVI 已读取；还需要水体指数或已有掩膜');
   } catch (error) {
     toast(error.message, true);
+  } finally {
+    state.pendingReads -= 1;
+    updateReadiness();
   }
 }
 
@@ -154,7 +186,7 @@ async function readGeoTiff(file) {
   }
   let bbox = null;
   try { bbox = image.getBoundingBox(); } catch { bbox = null; }
-  return { width, height, values, bbox, noData };
+  return { width, height, values, bbox, noData, provenance: await fingerprintFile(file, buffer) };
 }
 
 function applyGeoScale(raw, kind, scale) {
@@ -165,6 +197,7 @@ function applyGeoScale(raw, kind, scale) {
 }
 
 function rebuildGeoData() {
+  invalidateAnalysis();
   const base = state.geoRaw.ndvi;
   if (!base) {
     state.inputs = {};
@@ -183,6 +216,8 @@ function rebuildGeoData() {
   state.source = 'tiff';
   state.sourceName = state.geoFiles.ndvi || 'NDVI GeoTIFF';
   state.inputs = inputs;
+  state.sourceFiles = Object.fromEntries(Object.entries(state.geoRaw).map(([kind, raw]) => [kind, { ...raw.provenance, noData: raw.noData, bbox: raw.bbox, width: raw.width, height: raw.height }]));
+  state.appliedScale = scale;
   state.rows = null;
   state.width = base.width;
   state.height = base.height;
@@ -201,6 +236,12 @@ function rebuildGeoData() {
 
 async function loadGeo(kind, file) {
   if (!file) return;
+  if (state.pendingReads) { toast('请等待当前文件读取完成后重试'); return; }
+  state.pendingReads += 1;
+  invalidateAnalysis();
+  updateReadiness();
+  const previousRaw = state.geoRaw[kind];
+  const previousName = state.geoFiles[kind];
   const slot = document.querySelector(`input[data-kind="${kind}"]`).closest('.raster-slot');
   const small = slot.querySelector('small');
   small.textContent = '正在读取…';
@@ -215,29 +256,48 @@ async function loadGeo(kind, file) {
     updateReadiness();
     toast(`已载入 ${methodLabels[kind] || 'NDVI'}：${file.name}`);
   } catch (error) {
-    delete state.geoRaw[kind];
-    delete state.geoFiles[kind];
+    if (previousRaw) { state.geoRaw[kind] = previousRaw; state.geoFiles[kind] = previousName; }
+    else { delete state.geoRaw[kind]; delete state.geoFiles[kind]; }
     slot.classList.remove('loaded');
     slot.querySelector('i').textContent = '+';
     small.textContent = kind === 'ndvi' ? '必需 · 单波段' : kind === 'mask' ? '可选 · 水体值 > 0.5' : '可选 · 单波段';
+    if (previousRaw) {
+      slot.classList.add('loaded'); slot.querySelector('i').textContent = '✓';
+      small.textContent = `${previousName} · ${previousRaw.width}×${previousRaw.height}（保留原文件）`;
+    }
     try { rebuildGeoData(); } catch {}
     toast(error.message, true);
+  } finally {
+    state.pendingReads -= 1;
+    updateReadiness();
   }
 }
 
 function computeAll() {
   const methods = availableMethods(state.inputs).filter((item) => item.ready);
-  state.results = {};
-  for (const method of methods) {
-    try {
-      state.results[method.id] = analyzeFvc(state.inputs, method.id, state.thresholds[method.id]);
-    } catch (error) {
-      state.results[method.id] = { error: error.message };
-    }
+  if (!methods.some(m => m.id === state.referenceMethod)) state.referenceMethod = methods[0]?.id;
+  if (state.fixedSource !== 'common' && !methods.some(m => m.id === state.fixedSource)) state.fixedSource = 'common';
+  state.experiment = runExperiment(state.inputs, { thresholds: state.thresholds, referenceMethod: state.referenceMethod, fixedSource: state.fixedSource });
+  state.results = state.experiment.results[state.selectedMode];
+  if (!methods.some(m => m.id === state.selectedMethod)) state.selectedMethod = methods[0].id;
+  state.runId = crypto.randomUUID();
+  state.runAt = new Date().toISOString();
+  $('#export-btn').disabled = false;
+  $('#audit-btn').disabled = false;
+  renderExperimentControls();
+}
+
+function renderExperimentControls() {
+  for (const [id, selected, includeCommon] of [['reference-select', state.referenceMethod, false], ['fixed-source-select', state.fixedSource, true]]) {
+    const select = document.getElementById(id);
+    select.replaceChildren();
+    if (includeCommon) select.add(new Option('所有方案共同非水体的 P5/P95', 'common'));
+    for (const method of state.experiment.methods) select.add(new Option(methodLabels[method] + (includeCommon ? ' 非水体 P5/P95' : ''), method));
+    select.value = selected;
   }
-  const viable = methods.filter((method) => !state.results[method.id]?.error);
-  if (!viable.length) throw new Error(methods.map((method) => state.results[method.id]?.error).filter(Boolean)[0] || '没有可用的水体掩膜方案');
-  if (!viable.some((method) => method.id === state.selectedMethod)) state.selectedMethod = viable[0].id;
+  $('#mode-select').value = state.selectedMode;
+  const fixed = state.experiment.fixedEndmembers;
+  $('#experiment-note').textContent = `共同非水体：${state.experiment.commonIndices.length} 像元。固定端元：${fixed ? `${formatNumber(fixed.soil)} / ${formatNumber(fixed.vegetation)}` : `不可估计（${state.experiment.fixedError}）`}。${state.experiment.warnings.join(' ')} 栅格须预先完成 CRS/像元网格对齐；本工具未进行精度验证。`;
 }
 
 function renderMethodSwitch() {
@@ -250,7 +310,7 @@ function renderMethodSwitch() {
     button.setAttribute('aria-checked', String(method.id === state.selectedMethod));
     button.className = method.id === state.selectedMethod ? 'active' : '';
     button.textContent = method.label;
-    button.disabled = Boolean(state.results[method.id]?.error);
+    button.title = state.results[method.id]?.error ?? '';
     button.addEventListener('click', () => {
       state.selectedMethod = method.id;
       renderResults();
@@ -311,25 +371,43 @@ function renderComparison() {
   const body = $('#compare-body');
   body.replaceChildren();
   for (const method of availableMethods(state.inputs).filter((item) => item.ready)) {
-    const result = state.results[method.id];
+    for (const mode of MODES) {
+    const result = state.experiment.results[mode][method.id];
     const row = document.createElement('tr');
-    if (method.id === state.selectedMethod) row.className = 'active';
+    if (method.id === state.selectedMethod && mode === state.selectedMode) row.className = 'active';
+    const name = `${method.label} / ${mode === 'fixed' ? '固定' : '独立'}`;
     if (result.error) {
-      row.innerHTML = `<td><i class="method-badge"></i>${method.label}</td><td colspan="5">${result.error}</td>`;
+      const label = document.createElement('td'); label.textContent = name;
+      const error = document.createElement('td'); error.colSpan = 6; error.textContent = result.error;
+      row.append(label, error);
     } else {
       const threshold = state.thresholds[method.id];
-      row.innerHTML = `<td><i class="method-badge"></i>${method.label}</td><td>&gt; ${formatNumber(threshold, 2)}</td><td>${result.waterCount.toLocaleString()}</td><td>${formatNumber(result.soil)}</td><td>${formatNumber(result.vegetation)}</td><td>${formatNumber(result.meanFvc, 3)}</td>`;
+      const stats = state.experiment.comparisons[method.id].modes[mode];
+      row.innerHTML = `<td>${name}</td><td>&gt; ${formatNumber(threshold, 2)}</td><td>${formatNumber(result.soil)}</td><td>${formatNumber(result.vegetation)}</td><td>${formatNumber(result.meanFvc, 3)}</td><td>${formatNumber(stats.commonNonwater.mean, 3)} (n=${stats.commonNonwater.count})</td><td>${formatNumber(stats.pairedDifference.meanDelta, 6)} (n=${stats.pairedDifference.count})</td>`;
     }
     body.append(row);
+    }
+  }
+  const regionsBody = $('#regions-body'); regionsBody.replaceChildren();
+  for (const method of state.experiment.methods) {
+    const regions = state.experiment.comparisons[method].regions;
+    const row = document.createElement('tr');
+    for (const value of [methodLabels[method], ...Object.values(regions).map(a => a.length)]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
+    regionsBody.append(row);
   }
 }
 
 function renderResults() {
   const result = state.results[state.selectedMethod];
-  if (!result || result.error) return;
+  if (!result) return;
   renderMethodSwitch();
   $('#threshold-input').value = state.thresholds[state.selectedMethod];
   $('#threshold-hint').textContent = state.selectedMethod === 'mask' ? `掩膜值 > ${state.thresholds.mask} 判为水体` : `指数值 > ${state.thresholds[state.selectedMethod]} 判为水体`;
+  $('#result-error').hidden = !result.error;
+  $('#result-error').textContent = result.error ? `${methodLabels[state.selectedMethod]} / ${state.selectedMode} 无法计算：${result.error}。错误和像元分类仍可导出审计。` : '';
+  $('#result-display').hidden = Boolean(result.error);
+  renderComparison();
+  if (result.error) { state.mapRect = null; return; }
   $('#soil-value').textContent = formatNumber(result.soil);
   $('#veg-value').textContent = formatNumber(result.vegetation);
   $('#mean-value').textContent = formatNumber(result.meanFvc, 3);
@@ -346,7 +424,6 @@ function renderResults() {
   $('#preview-size').textContent = `${state.width.toLocaleString()} × ${state.height.toLocaleString()}`;
   $('#preview-title').textContent = state.spatial ? 'FVC 像元空间分布' : 'FVC 像元序列预览';
   renderCanvas(result);
-  renderComparison();
 }
 
 function analyze() {
@@ -355,7 +432,7 @@ function analyze() {
     state.analyzed = true;
     const section = $('#results-section');
     section.hidden = false;
-    $('#result-subtitle').textContent = `${state.sourceName} · ${state.inputs.ndvi.length.toLocaleString()} 个像元 · 端元来自各方案掩膜后的非水体 NDVI`;
+    $('#result-subtitle').textContent = `${state.sourceName} · ${state.inputs.ndvi.length.toLocaleString()} 个像元 · 两种端元模式同时计算与导出`;
     renderResults();
     requestAnimationFrame(() => section.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   } catch (error) {
@@ -364,8 +441,8 @@ function analyze() {
 }
 
 function updateThreshold() {
-  const value = Number($('#threshold-input').value);
-  if (!Number.isFinite(value)) return;
+  const value = safeNumber($('#threshold-input').value);
+  if (!Number.isFinite(value)) { $('#threshold-input').value = state.thresholds[state.selectedMethod]; toast('阈值必须是有限数值', true); return; }
   state.thresholds[state.selectedMethod] = value;
   try {
     computeAll();
@@ -393,29 +470,32 @@ function downloadBlob(name, content, type) {
 }
 
 function exportResults() {
-  const result = state.results[state.selectedMethod];
-  if (!result || result.error) return;
-  const lines = ['pixel_id,x,y,ndvi,water_method,is_water,fvc'];
-  for (let i = 0; i < state.inputs.ndvi.length; i += 1) {
-    const row = state.rows?.data[i];
-    const columns = state.rows?.columns;
-    const id = row && columns.id ? row[columns.id] : i + 1;
-    const x = row && columns.x ? row[columns.x] : state.spatial ? i % state.width : '';
-    const y = row && columns.y ? row[columns.y] : state.spatial ? Math.floor(i / state.width) : '';
-    lines.push([
-      id, x, y,
-      Number.isFinite(state.inputs.ndvi[i]) ? state.inputs.ndvi[i] : '',
-      state.selectedMethod,
-      result.water[i] ? 1 : 0,
-      Number.isFinite(result.fvc[i]) ? result.fvc[i].toFixed(6) : '',
-    ].map(csvEscape).join(','));
-  }
-  const base = state.sourceName.replace(/\.[^.]+$/, '').replace(/[^\w\u4e00-\u9fa5-]+/g, '_');
-  downloadBlob(`${base}_${state.selectedMethod}_fvc.csv`, `\uFEFF${lines.join('\n')}`, 'text/csv;charset=utf-8');
-  toast('已导出像元级结果；水体与无效像元的 FVC 保持为空');
+  if (!state.experiment) return;
+  const content = exportPixelsCsv(state.inputs, state.experiment, { runId: state.runId, coordinateMeaning: state.source === 'csv' ? 'user_supplied_or_absent' : 'zero_based_column_row', pixel: i => {
+    const row = state.rows?.data[i], columns = state.rows?.columns;
+    return { id: row && columns.id ? row[columns.id] : i + 1,
+      x: row && columns.x ? row[columns.x] : state.spatial ? i % state.width : null,
+      y: row && columns.y ? row[columns.y] : state.spatial ? Math.floor(i / state.width) : null };
+  } });
+  downloadBlob(`fvc_${state.runId}_pixels.csv`, content, 'text/csv;charset=utf-8');
+  toast('已导出两种端元模式与所有方案；请同时保存同编号审计 JSON');
+}
+
+function exportAudit() {
+  if (!state.experiment) return;
+  const audit = createAudit(state.experiment, { runId: state.runId, createdAt: state.runAt, sourceType: state.source,
+    files: Object.entries(state.sourceFiles).map(([role, info]) => ({ role, ...info })),
+    grid: { width: state.width, height: state.height, previewIsSpatial: state.spatial },
+    indexScaleFactor: state.source === 'tiff' ? state.appliedScale : 1,
+    coordinateMeaning: state.source === 'csv' ? 'user_supplied_or_absent' : 'zero_based_column_row',
+    selectedMode: state.selectedMode, selectedMethod: state.selectedMethod });
+  downloadBlob(`fvc_${state.runId}_audit.json`, JSON.stringify(audit, null, 2), 'application/json');
+  toast('审计已导出；文件名与校验值属于数据来源信息，分享前请检查');
 }
 
 function resetAll() {
+  if (state.pendingReads) { toast('请等待文件读取完成'); return; }
+  invalidateAnalysis();
   state.source = null;
   state.sourceName = '';
   state.inputs = {};
@@ -427,6 +507,10 @@ function resetAll() {
   state.geoFiles = {};
   state.results = {};
   state.selectedMethod = null;
+  state.sourceFiles = {};
+  state.thresholds = { mndwi: 0, ndwi: 0, mask: 0.5 }; state.appliedScale = 1;
+  $('#scale-input').value = 1;
+  state.selectedMode = 'independent'; state.referenceMethod = null; state.fixedSource = 'common';
   state.analyzed = false;
   $$('input[type="file"]').forEach((input) => { input.value = ''; });
   $('#csv-dropzone').classList.remove('loaded');
@@ -484,11 +568,26 @@ $$('.tab').forEach((tab) => tab.addEventListener('click', () => {
 $('#csv-input').addEventListener('change', (event) => loadCsv(event.target.files[0]));
 $$('input[data-kind]').forEach((input) => input.addEventListener('change', (event) => loadGeo(input.dataset.kind, event.target.files[0])));
 $('#scale-input').addEventListener('change', () => {
-  try { rebuildGeoData(); toast('已按新的缩放系数更新指数值'); } catch (error) { toast(error.message, true); }
+  if (!state.geoRaw.ndvi || state.pendingReads) return;
+  try { rebuildGeoData(); toast('已按新的缩放系数更新指数值'); } catch (error) { $('#scale-input').value = state.appliedScale; updateReadiness(); toast(error.message, true); }
 });
 $('#analyze-btn').addEventListener('click', analyze);
 $('#threshold-input').addEventListener('change', updateThreshold);
 $('#export-btn').addEventListener('click', exportResults);
+$('#audit-btn').addEventListener('click', exportAudit);
+$('#mode-select').addEventListener('change', () => {
+  if (!state.experiment) return;
+  state.selectedMode = $('#mode-select').value;
+  state.results = state.experiment.results[state.selectedMode];
+  renderResults();
+});
+for (const [id, key] of [['reference-select', 'referenceMethod'], ['fixed-source-select', 'fixedSource']]) {
+  document.getElementById(id).addEventListener('change', () => {
+    if (!state.experiment) return;
+    state[key] = document.getElementById(id).value;
+    try { computeAll(); renderResults(); } catch (error) { invalidateAnalysis(); toast(error.message, true); }
+  });
+}
 $('#reset-btn').addEventListener('click', resetAll);
 $('#template-btn').addEventListener('click', () => downloadBlob('poyang_fvc_input_structure.csv', '\uFEFFpixel_id,x,y,ndvi,mndwi,ndwi,water_mask\n', 'text/csv;charset=utf-8'));
 $('#format-help-btn').addEventListener('click', () => $('#format-dialog').showModal());

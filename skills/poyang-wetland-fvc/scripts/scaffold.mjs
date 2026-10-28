@@ -25,8 +25,10 @@ try {
 if (exists && (await readdir(target)).length) throw new Error('Refusing to overwrite a nonempty target directory');
 await mkdir(target, { recursive: true });
 for (const entry of await readdir(source)) {
+  if (['node_modules', 'dist', '.git', '.openai'].includes(entry) || entry.startsWith('.env')) continue;
   await cp(path.join(source, entry), path.join(target, entry), {
     recursive: true, force: false, errorOnExist: true,
+    filter: input => !['node_modules', 'dist', '.git', '.openai'].includes(path.basename(input)) && !path.basename(input).startsWith('.env'),
   });
 }
 console.log(`Created FVC source project at ${target}`);

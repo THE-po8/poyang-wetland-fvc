@@ -28,7 +28,9 @@ export function classifyWater(method, index, inputs, threshold = 0) {
   throw new Error(`未知水体掩膜方案：${method}`);
 }
 
-export function analyzeFvc(inputs, method, threshold = 0) {
+export const PIXEL_STATUS = Object.freeze(['valid_nonwater', 'excluded_water', 'invalid_ndvi', 'missing_water_value']);
+
+export function classifyPixels(inputs, method, threshold = 0) {
   if (!['mndwi', 'ndwi', 'mask'].includes(method)) throw new Error('必须选择一种已提供的水体方案');
   if (!Number.isFinite(threshold)) throw new Error('水体阈值必须是有限数值');
   const ndvi = inputs.ndvi;
@@ -39,34 +41,51 @@ export function analyzeFvc(inputs, method, threshold = 0) {
   }
 
   const water = new Uint8Array(ndvi.length);
+  const status = new Uint8Array(ndvi.length);
   const validLandNdvi = [];
   let invalidCount = 0;
   let unclassifiedCount = 0;
 
   for (let i = 0; i < ndvi.length; i += 1) {
     if (!Number.isFinite(ndvi[i])) {
+      status[i] = 2;
       invalidCount += 1;
       continue;
     }
     if (maskKey && !Number.isFinite(inputs[maskKey][i])) {
+      status[i] = 3;
       unclassifiedCount += 1;
       continue;
     }
     if (classifyWater(method, i, inputs, threshold)) {
+      status[i] = 1;
       water[i] = 1;
       continue;
     }
     validLandNdvi.push(ndvi[i]);
   }
 
-  if (validLandNdvi.length < 2) {
-    throw new Error('掩膜后有效非水体 NDVI 像元不足，无法计算分位数');
-  }
+  return { status, water, validLandNdvi, invalidCount, unclassifiedCount };
+}
 
-  const soil = quantile(validLandNdvi, 0.05);
-  const vegetation = quantile(validLandNdvi, 0.95);
+export function deriveEndmembers(values) {
+  const finite = Array.from(values).filter(Number.isFinite);
+  if (finite.length < 2) throw new Error('掩膜后有效非水体 NDVI 像元不足，无法计算分位数');
+  const soil = quantile(finite, 0.05);
+  const vegetation = quantile(finite, 0.95);
+  if (!(vegetation > soil)) throw new Error('NDVIsoil 与 NDVIveg 相同，无法计算 FVC');
+  return { soil, vegetation, sampleCount: finite.length };
+}
+
+export function analyzeFvc(inputs, method, threshold = 0, options = {}) {
+  const ndvi = inputs.ndvi;
+  const { status, water, validLandNdvi, invalidCount, unclassifiedCount } = classifyPixels(inputs, method, threshold);
+  const endmembers = options.endmembers ?? deriveEndmembers(validLandNdvi);
+  const { soil, vegetation } = endmembers;
+  if (!Number.isFinite(soil) || !Number.isFinite(vegetation) || !(vegetation > soil)) {
+    throw new Error('端元必须是有限数值，且 NDVIveg 大于 NDVIsoil');
+  }
   const span = vegetation - soil;
-  if (!(span > 0)) throw new Error('NDVIsoil 与 NDVIveg 相同，无法计算 FVC');
 
   const fvc = new Float32Array(ndvi.length);
   fvc.fill(Number.NaN);
@@ -76,8 +95,7 @@ export function analyzeFvc(inputs, method, threshold = 0) {
   let oneCount = 0;
 
   for (let i = 0; i < ndvi.length; i += 1) {
-    if (!Number.isFinite(ndvi[i]) || water[i]) continue;
-    if (maskKey && !Number.isFinite(inputs[maskKey][i])) continue;
+    if (status[i] !== 0) continue;
     const raw = (ndvi[i] - soil) / span;
     const clamped = Math.max(0, Math.min(1, raw));
     fvc[i] = clamped;
@@ -91,6 +109,7 @@ export function analyzeFvc(inputs, method, threshold = 0) {
     soil,
     vegetation,
     fvc,
+    status,
     water,
     resultCount,
     waterCount: water.reduce((sum, value) => sum + value, 0),

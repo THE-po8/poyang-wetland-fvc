@@ -29,7 +29,7 @@
         <div class="hero-copy">
           <p class="eyebrow">POYANG LAKE · PIXEL DICHOTOMY MODEL</p>
           <h1 id="hero-title">从真实 NDVI 到<br/><span>可审查的植被覆盖度</span></h1>
-          <p class="hero-lead">导入像元数据，使用 5% 与 95% 分位数确定端元，比较三种水体排除方案，并把水体与湿地植被结果明确分开。</p>
+          <p class="hero-lead">导入真实像元数据，对照独立端元与固定端元，区分水体排除、统计范围和端元选择的影响。非水体不等于湿地植被，研究区与植被范围须预先限定。</p>
           <div class="formula-card" aria-label="FVC 计算公式">
             <div class="formula-main">
               <span>FVC</span><b>=</b>
@@ -95,7 +95,8 @@
         <div class="results-heading">
           <div><p class="eyebrow">ANALYSIS WORKSPACE</p><h2 id="results-title">模型结果与掩膜对比</h2><p id="result-subtitle">—</p></div>
           <div class="results-actions">
-            <button id="export-btn" class="secondary-btn" type="button">导出像元结果 CSV</button>
+            <button id="export-btn" class="secondary-btn" type="button" disabled>导出全部对照像元 CSV</button>
+            <button id="audit-btn" class="secondary-btn" type="button" disabled>导出审计 JSON</button>
           </div>
         </div>
 
@@ -104,6 +105,14 @@
           <label class="threshold-control"><span>判为水体的阈值</span><input id="threshold-input" type="number" step="0.01" value="0"/><small id="threshold-hint">指数值 &gt; 0</small></label>
         </div>
 
+        <div class="experiment-controls">
+          <label>显示端元模式<select id="mode-select"><option value="independent">独立端元：各方案非水体 P5/P95</option><option value="fixed">固定端元：所有方案共用同一对端元</option></select></label>
+          <label>区域比较参考方案<select id="reference-select"></select></label>
+          <label>固定端元来源<select id="fixed-source-select"><option value="common">所有方案共同非水体的 P5/P95</option></select></label>
+        </div>
+        <p id="experiment-note" class="experiment-note" role="status"></p>
+        <p id="result-error" class="data-status warn" role="alert" hidden></p>
+        <div id="result-display">
         <div class="metrics-grid">
           <article class="metric-card soil"><span>NDVI<sub>soil</sub> · P5</span><strong id="soil-value">—</strong><small>非水体有效像元</small></article>
           <article class="metric-card veg"><span>NDVI<sub>veg</sub> · P95</span><strong id="veg-value">—</strong><small>非水体有效像元</small></article>
@@ -115,29 +124,34 @@
           <article class="map-card">
             <div class="panel-title"><div><span>空间预览</span><h3 id="preview-title">FVC 像元分布</h3></div><span id="preview-size" class="tag">—</span></div>
             <div class="canvas-wrap"><canvas id="fvc-canvas" width="880" height="520" aria-label="FVC 像元预览图"></canvas><div id="canvas-tooltip" class="canvas-tooltip" hidden></div></div>
-            <div class="legend"><span><i class="water-swatch"></i>排除的水体</span><span><i class="gradient-swatch"></i>湿地植被 FVC：低 → 高</span><span><i class="invalid-swatch"></i>无效 / 掩膜缺失</span></div>
+            <div class="legend"><span><i class="water-swatch"></i>排除的水体</span><span><i class="gradient-swatch"></i>非水体 FVC：低 → 高</span><span><i class="invalid-swatch"></i>无效 / 掩膜缺失</span></div>
           </article>
 
           <article class="audit-card">
             <div class="panel-title"><div><span>过程审计</span><h3>像元去向</h3></div></div>
             <div class="donut-wrap"><div id="donut" class="donut"><div><strong id="donut-value">—</strong><small>进入 FVC</small></div></div></div>
             <dl class="audit-list">
-              <div><dt><i class="result-dot"></i>湿地植被结果</dt><dd id="result-count">—</dd></div>
+              <div><dt><i class="result-dot"></i>有效非水体结果</dt><dd id="result-count">—</dd></div>
               <div><dt><i class="water-dot"></i>水体（已排除）</dt><dd id="water-count">—</dd></div>
               <div><dt><i class="invalid-dot"></i>无效 / 无掩膜值</dt><dd id="invalid-count">—</dd></div>
             </dl>
             <p class="audit-note">水体像元不参与端元分位数计算，也不会写入 FVC 结果。</p>
           </article>
         </div>
+        </div>
 
         <article class="compare-card">
-          <div class="panel-title"><div><span>方案比较</span><h3>同一批真实数据，不同水体边界</h3></div><small>每种方案独立排除水体并重新计算 P5 / P95</small></div>
+          <div class="panel-title"><div><span>端元对照</span><h3>独立端元与固定端元：并列比较</h3></div><small>全域均值不具相同统计范围；配对差值不是精度指标</small></div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>方案</th><th>水体阈值</th><th>排除水体</th><th>NDVI<sub>soil</sub></th><th>NDVI<sub>veg</sub></th><th>平均 FVC</th></tr></thead>
+              <thead><tr><th>方案 / 模式</th><th>水体阈值</th><th>NDVIsoil</th><th>NDVIveg</th><th>各自全域均值</th><th>共同非水体均值</th><th>共享区域配对差值</th></tr></thead>
               <tbody id="compare-body"></tbody>
             </table>
           </div>
+        </article>
+        <article class="compare-card">
+          <div class="panel-title"><div><span>统计范围对照</span><h3>相对于参考方案的像元去向</h3></div><small>缺失分类不等于水体；完整 4×4 状态转移表见审计 JSON</small></div>
+          <div class="table-wrap"><table><thead><tr><th>方案</th><th>共享非水体</th><th>仅参考方案保留</th><th>仅当前方案保留</th><th>两者均不保留</th></tr></thead><tbody id="regions-body"></tbody></table></div>
         </article>
       </section>
     </main>
